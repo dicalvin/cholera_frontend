@@ -1,0 +1,504 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\geometry{margin=2.5cm}
+
+% Code listing style
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=5pt,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    breakatwhitespace=true,
+    tabsize=2
+}
+
+\title{\textbf{Cholera Surveillance Dashboard:\\
+Methodology and Implementation}}
+\author{Data Science Project}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document presents the methodology for a comprehensive Cholera Surveillance Dashboard that integrates historical epidemiological data, machine learning forecasting models, and real-time weather information to provide early warning capabilities and response insights. The system employs a Voting Ensemble model and Long Short-Term Memory (LSTM) neural networks for case prediction, combined with weather API integration for enhanced forecasting accuracy. The dashboard is implemented as a modern web application using React for the frontend and Flask for the backend API services.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+The Cholera Surveillance Dashboard is designed to support public health decision-making by providing comprehensive analytics, forecasting capabilities, and early warning systems. The system processes historical cholera case data from Uganda (2011-2024), integrates real-time weather conditions, and employs advanced machine learning models to generate actionable insights.
+
+\subsection{System Architecture}
+
+The dashboard follows a three-tier architecture:
+
+\begin{itemize}
+    \item \textbf{Frontend}: React-based single-page application with interactive visualizations
+    \item \textbf{Backend API}: Flask-based RESTful services for model predictions
+    \item \textbf{Data Layer}: CSV datasets and pre-trained machine learning models
+\end{itemize}
+
+\section{Data Sources and Preprocessing}
+
+\subsection{Primary Dataset}
+
+The system utilizes a comprehensive cholera dataset (\texttt{cholera\_data3.csv}) containing 8,702 records spanning from 2011 to 2024. The dataset includes the following key attributes:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Attribute} & \textbf{Description} \\
+\midrule
+Location/District & Geographic identifier \\
+Region & Administrative region (Central, Eastern, Northern, Western) \\
+reporting\_date & Date of case report (DD/MM/YYYY format) \\
+sCh & Suspected cholera cases \\
+cCh & Confirmed cholera cases \\
+deaths & Number of deaths \\
+CFR & Case Fatality Rate (\%) \\
+\bottomrule
+\end{tabular}
+\caption{Dataset Attributes}
+\end{table}
+
+\subsection{Data Preprocessing}
+
+\subsubsection{Date Parsing}
+The system implements robust date parsing to handle the DD/MM/YYYY format:
+\begin{lstlisting}
+def parse_date(date_str):
+    # Handle DD/MM/YYYY format
+    if '/' in date_str:
+        parts = date_str.split('/')
+        day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+        return pd.Timestamp(year, month, day)
+    return pd.to_datetime(date_str)
+\end{lstlisting}
+
+\subsubsection{Data Validation}
+\begin{itemize}
+    \item Missing values in numeric columns are replaced with 0
+    \item Invalid dates are filtered out
+    \item Negative case counts are corrected to 0
+    \item Infinite values (NaN, Infinity) are sanitized for model compatibility
+\end{itemize}
+
+\subsubsection{Feature Engineering}
+The preprocessing pipeline creates derived features:
+\begin{itemize}
+    \item \textbf{Temporal features}: Month, day of year, quarter
+    \item \textbf{Cyclical encoding}: Sine/cosine transformations for seasonality
+    \item \textbf{Lag features}: Previous day/week/month values
+    \item \textbf{Rolling statistics}: Moving averages and standard deviations
+    \item \textbf{Region encoding}: One-hot encoding for geographic regions
+\end{itemize}
+
+\section{Machine Learning Models}
+
+\subsection{Voting Ensemble Model}
+
+The Voting Ensemble combines four regression algorithms to improve prediction robustness:
+
+\subsubsection{Base Models}
+\begin{enumerate}
+    \item \textbf{Lasso Regression}: L1 regularization for feature selection
+    \item \textbf{Ridge Regression}: L2 regularization for multicollinearity handling
+    \item \textbf{ElasticNet}: Combined L1 and L2 regularization
+    \item \textbf{XGBoost}: Gradient boosting for non-linear relationships
+\end{enumerate}
+
+\subsubsection{Feature Set}
+The ensemble model utilizes 36 engineered features:
+\begin{align}
+F = \{&f_1: \text{month}, f_2: \text{day\_of\_year}, f_3: \text{quarter}, \\
+     &f_4: \text{lag\_1}, f_5: \text{lag\_7}, f_6: \text{lag\_30}, \\
+     &f_7: \text{rolling\_mean\_7}, f_8: \text{rolling\_std\_7}, \\
+     &f_9: \text{rolling\_mean\_30}, f_{10}: \text{rolling\_std\_30}, \\
+     &f_{11-14}: \text{region\_encoding}, \ldots\}
+\end{align}
+
+\subsubsection{Training Process}
+\begin{algorithm}[h]
+\caption{Voting Ensemble Training}
+\begin{algorithmic}[1]
+\State Load and preprocess dataset
+\State Create 36 features from raw data
+\State Split data: 80\% training, 20\% validation
+\State Train Lasso, Ridge, ElasticNet, XGBoost
+\State Combine models using VotingRegressor
+\State Evaluate on validation set
+\State Save model as \texttt{voting\_ensemble\_model.pkl}
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Prediction}
+The ensemble prediction is computed as:
+\begin{equation}
+\hat{y} = \frac{1}{4}\left(\hat{y}_{\text{Lasso}} + \hat{y}_{\text{Ridge}} + \hat{y}_{\text{ElasticNet}} + \hat{y}_{\text{XGBoost}}\right)
+\end{equation}
+
+\subsection{Long Short-Term Memory (LSTM) Model}
+
+\subsubsection{Architecture}
+The LSTM model is designed to capture temporal dependencies in cholera case sequences:
+
+\begin{itemize}
+    \item \textbf{Input}: Sequence of 30 days of historical data
+    \item \textbf{Features per timestep}: 
+    \begin{itemize}
+        \item Historical suspected cases
+        \item Weather features (temperature, humidity, precipitation)
+        \item Temporal features (month, day of year, cyclical encodings)
+        \item Geographic features (region encoding)
+    \end{itemize}
+    \item \textbf{Output}: Predicted suspected cases for next day
+\end{itemize}
+
+\subsubsection{Feature Preparation}
+For each timestep $t$, the feature vector is:
+\begin{equation}
+\mathbf{x}_t = [\text{sCh}_t, T_t, H_t, P_t, \sin(\theta_m), \cos(\theta_m), \sin(\theta_d), \cos(\theta_d), R]
+\end{equation}
+where:
+\begin{itemize}
+    \item $\text{sCh}_t$: Suspected cases at time $t$
+    \item $T_t, H_t, P_t$: Temperature, humidity, precipitation (normalized)
+    \item $\theta_m, \theta_d$: Cyclical encodings for month and day
+    \item $R$: Region encoding vector
+\end{itemize}
+
+\subsubsection{Multi-Step Forecasting}
+The LSTM generates 14-day forecasts using iterative prediction:
+\begin{algorithm}[h]
+\caption{LSTM Multi-Step Forecast}
+\begin{algorithmic}[1]
+\State Load historical sequence (last 30-60 days)
+\State For $i = 1$ to $14$:
+    \State Prepare feature sequence
+    \State Predict $\hat{y}_i$ using LSTM
+    \State Add $\hat{y}_i$ to history
+    \State Update date: $d_i = d_{i-1} + 1$ day
+\State Return 14-day forecast
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Fallback Mechanism}
+When TensorFlow/LSTM is unavailable, the system employs a statistical fallback:
+\begin{equation}
+\hat{y} = \bar{y}_{\text{recent}} \times f_T \times f_P \times f_{\text{trend}}
+\end{equation}
+where:
+\begin{itemize}
+    \item $\bar{y}_{\text{recent}}$: Average of last 7 days
+    \item $f_T$: Temperature adjustment factor
+    \item $f_P$: Precipitation adjustment factor
+    \item $f_{\text{trend}}$: Trend-based adjustment
+\end{itemize}
+
+\section{Weather Integration}
+
+\subsection{Weather API}
+The system integrates with WeatherAPI.com to obtain real-time and forecast weather data for Uganda districts.
+
+\subsubsection{Data Retrieval}
+\begin{itemize}
+    \item \textbf{Current conditions}: Temperature, humidity, precipitation
+    \item \textbf{24-hour forecast}: Hourly predictions
+    \item \textbf{14-day forecast}: Extended outlook for early warning
+\end{itemize}
+
+\subsubsection{Weather-Based Alerts}
+The system generates alerts based on weather thresholds:
+\begin{align}
+\text{Alert}_{\text{temp}} &= \begin{cases}
+    \text{High} & \text{if } T > 35°C \\
+    \text{Low} & \text{if } T < 18°C \\
+    \text{Normal} & \text{otherwise}
+\end{cases} \\
+\text{Alert}_{\text{precip}} &= \begin{cases}
+    \text{Heavy} & \text{if } P > 25\text{mm} \\
+    \text{Moderate} & \text{if } 10 < P \leq 25\text{mm} \\
+    \text{Light} & \text{otherwise}
+\end{cases}
+\end{align}
+
+\subsubsection{Weather Impact Analysis}
+Weather conditions are incorporated into predictions:
+\begin{itemize}
+    \item High temperatures ($>35°C$): Increase risk factor by 20\%
+    \item Heavy precipitation ($>25$mm): Increase risk factor by 30\%
+    \item Temperature changes: Alert on rapid fluctuations
+\end{itemize}
+
+\section{Forecasting Continuity}
+
+\subsection{Dataset Continuation}
+The system ensures predictions continue seamlessly from the dataset's last date:
+
+\begin{lstlisting}
+# Get last date in dataset
+last_date = dataset['reporting_date'].max()
+
+# Start forecast from next day
+forecast_start = last_date + timedelta(days=1)
+\end{lstlisting}
+
+This ensures:
+\begin{itemize}
+    \item No gaps between historical data and predictions
+    \item Temporal continuity for trend analysis
+    \item Accurate year labeling in visualizations
+\end{itemize}
+
+\section{Visualization Components}
+
+\subsection{Interactive Charts}
+The dashboard employs Recharts library for data visualization:
+
+\subsubsection{Chart Types}
+\begin{itemize}
+    \item \textbf{Area Charts}: Cumulative trends and forecasts
+    \item \textbf{Line Charts}: Time series data
+    \item \textbf{Bar Charts}: Regional distributions
+    \item \textbf{Composed Charts}: Multiple metrics overlay
+    \item \textbf{Scatter Charts}: Correlation analysis
+\end{itemize}
+
+\subsubsection{LSTM Forecast Visualization}
+The forecast chart displays:
+\begin{itemize}
+    \item \textbf{Daily predictions}: Purple area chart
+    \item \textbf{Cumulative total}: Green line overlay
+    \item \textbf{Year information}: Displayed in title and tooltips
+    \item \textbf{Summary statistics}: Total, average, peak, minimum
+\end{itemize}
+
+\subsection{Interactive Map}
+The dashboard includes a choropleth map of Uganda districts:
+\begin{itemize}
+    \item Color-coded by case density
+    \item Interactive tooltips with district statistics
+    \item Integration with date filtering
+    \item GeoJSON-based district boundaries
+\end{itemize}
+
+\section{API Architecture}
+
+\subsection{Flask RESTful Services}
+
+\subsubsection{Endpoints}
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Endpoint} & \textbf{Purpose} \\
+\midrule
+\texttt{/health} & System health check \\
+\texttt{/api/predict} & Voting Ensemble prediction \\
+\texttt{/api/lstm/predict} & LSTM single prediction \\
+\texttt{/api/lstm/forecast} & LSTM 14-day forecast \\
+\bottomrule
+\end{tabular}
+\caption{API Endpoints}
+\end{table}
+
+\subsubsection{Request Format}
+\begin{lstlisting}[language=JSON]
+{
+    "date": "2024-01-01",
+    "region": "Central",
+    "district": "Kampala",
+    "temperature": 25.0,
+    "humidity": 70.0,
+    "precipitation": 0.0,
+    "historicalSuspected": [optional],
+    "steps": 14
+}
+\end{lstlisting}
+
+\subsubsection{Response Format}
+\begin{lstlisting}[language=JSON]
+{
+    "forecast": [
+        {
+            "date": "2024-01-02",
+            "predicted": 190.93,
+            "step": 1
+        },
+        ...
+    ],
+    "model_type": "LSTM",
+    "timestamp": "2024-01-01T12:00:00",
+    "historical_data_points": 60
+}
+\end{lstlisting}
+
+\subsection{Error Handling}
+The API implements comprehensive error handling:
+\begin{itemize}
+    \item Input validation for all parameters
+    \item NaN/Infinity sanitization
+    \item Graceful fallback when models unavailable
+    \item Detailed error messages for debugging
+\end{itemize}
+
+\section{Frontend Implementation}
+
+\subsection{React Architecture}
+The frontend is built using React with the following structure:
+
+\subsubsection{Pages}
+\begin{itemize}
+    \item \textbf{Overview}: Summary statistics and map
+    \item \textbf{Analytics}: Interactive charts with filtering
+    \item \textbf{Early Warning}: Alert thresholds and LSTM forecasts
+    \item \textbf{Response Insights}: Spread patterns and effectiveness
+    \item \textbf{Resource Planning}: Priority areas and impact assessment
+    \item \textbf{Weather}: Weather conditions and alerts
+\end{itemize}
+
+\subsubsection{Custom Hooks}
+\begin{itemize}
+    \item \texttt{useCholeraData}: Data loading and parsing
+    \item \texttt{useWeatherData}: Weather API integration
+    \item \texttt{useLSTMPredictions}: LSTM forecast retrieval
+\end{itemize}
+
+\subsubsection{State Management}
+\begin{itemize}
+    \item Centralized data loading in \texttt{App.jsx}
+    \item Memoized data transformations
+    \item Date range filtering across components
+\end{itemize}
+
+\section{Data Flow}
+
+\subsection{Prediction Pipeline}
+\begin{enumerate}
+    \item User selects region/district on Early Warning page
+    \item Frontend requests weather data for selected location
+    \item Frontend calls \texttt{/api/lstm/forecast} with:
+    \begin{itemize}
+        \item Region/district information
+        \item Current weather conditions
+        \item Optional historical data
+    \end{itemize}
+    \item API loads dataset and extracts historical sequence
+    \item API determines last dataset date
+    \item API generates 14-day forecast starting from next day
+    \item API returns forecast with dates and predictions
+    \item Frontend calculates cumulative totals
+    \item Frontend displays chart with daily and cumulative data
+\end{enumerate}
+
+\section{Model Evaluation}
+
+\subsection{Performance Metrics}
+The models are evaluated using:
+\begin{itemize}
+    \item \textbf{Mean Absolute Error (MAE)}:
+    \begin{equation}
+    \text{MAE} = \frac{1}{n}\sum_{i=1}^{n}|y_i - \hat{y}_i|
+    \end{equation}
+    \item \textbf{Root Mean Squared Error (RMSE)}:
+    \begin{equation}
+    \text{RMSE} = \sqrt{\frac{1}{n}\sum_{i=1}^{n}(y_i - \hat{y}_i)^2}
+    \end{equation}
+    \item \textbf{Mean Absolute Percentage Error (MAPE)}:
+    \begin{equation}
+    \text{MAPE} = \frac{100}{n}\sum_{i=1}^{n}\left|\frac{y_i - \hat{y}_i}{y_i}\right|
+    \end{equation}
+\end{itemize}
+
+\subsection{Validation Strategy}
+\begin{itemize}
+    \item Time-series cross-validation
+    \item Train/validation split preserving temporal order
+    \item Out-of-sample testing on recent data
+\end{itemize}
+
+\section{Technical Specifications}
+
+\subsection{Technology Stack}
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Component} & \textbf{Technology} \\
+\midrule
+Frontend Framework & React 18+ \\
+Build Tool & Vite \\
+Charts Library & Recharts \\
+Maps & React Leaflet \\
+Backend & Flask (Python) \\
+ML Framework & Scikit-learn, TensorFlow/Keras \\
+Data Processing & Pandas, NumPy \\
+Weather API & WeatherAPI.com \\
+\bottomrule
+\end{tabular}
+\caption{Technology Stack}
+\end{table}
+
+\subsection{System Requirements}
+\begin{itemize}
+    \item \textbf{Python}: 3.8-3.11 (for TensorFlow compatibility)
+    \item \textbf{Node.js}: 18+ for frontend development
+    \item \textbf{Memory}: Minimum 4GB RAM
+    \item \textbf{Storage}: ~500MB for models and data
+\end{itemize}
+
+\section{Deployment}
+
+\subsection{Development Setup}
+\begin{enumerate}
+    \item Install Python dependencies: \texttt{pip install -r requirements.txt}
+    \item Install Node.js dependencies: \texttt{npm install}
+    \item Start Flask API: \texttt{python lstm\_predict.py}
+    \item Start React dev server: \texttt{npm run dev}
+\end{enumerate}
+
+\subsection{Production Considerations}
+\begin{itemize}
+    \item API runs on port 5001
+    \item Frontend runs on port 5173 (development)
+    \item CORS enabled for cross-origin requests
+    \item Model lazy loading for performance
+    \item Dataset caching for faster responses
+\end{itemize}
+
+\section{Conclusion}
+
+The Cholera Surveillance Dashboard provides a comprehensive solution for monitoring, analyzing, and forecasting cholera cases in Uganda. By integrating historical data, machine learning models, and real-time weather information, the system enables proactive public health decision-making. The modular architecture ensures maintainability and extensibility for future enhancements.
+
+\section*{Acknowledgments}
+
+This system integrates multiple data sources and technologies to provide actionable insights for cholera surveillance and response planning.
+
+\end{document}
+
