@@ -1,15 +1,46 @@
 const formatForInput = (date) =>
   date ? date.toISOString().split('T')[0] : ''
 
+const safeNumber = (value) => {
+  if (value === null || value === undefined || value === '') return 0
+  const parsed = Number(
+    typeof value === 'string' ? value.replace(/,/g, '').trim() : value,
+  )
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const confirmedValue = (row) =>
+  safeNumber(
+    row?.cCh ??
+      row?.cch ??
+      row?.CCH ??
+      row?.confirmed_cases ??
+      row?.confirmed ??
+      row?.cases_confirmed ??
+      row?.raw?.cCh ??
+      row?.raw?.cch ??
+      row?.raw?.CCH ??
+      row?.raw?.confirmed_cases ??
+      row?.raw?.confirmed ??
+      row?.raw?.cases_confirmed,
+  )
+
 const filterByDateRange = (rows, { start, end }) => {
   if (!rows.length) return []
   const startDate = start ? new Date(start) : null
   const endDate = end ? new Date(end) : null
 
+  // Treat input dates as full-day boundaries *in UTC*.
+  // Important: `new Date("YYYY-MM-DD")` is parsed as UTC midnight,
+  // so using local-time `setHours()` can exclude boundary-day rows
+  // depending on the user's timezone.
+  if (startDate) startDate.setUTCHours(0, 0, 0, 0)
+  if (endDate) endDate.setUTCHours(23, 59, 59, 999)
+
   return rows.filter((row) => {
     if (!row.reportingDate) return false
-    if (startDate && row.reportingDate < startDate) return false
-    if (endDate && row.reportingDate > endDate) return false
+    if (startDate && row.reportingDate.valueOf() < startDate.valueOf()) return false
+    if (endDate && row.reportingDate.valueOf() > endDate.valueOf()) return false
     return true
   })
 }
@@ -74,7 +105,7 @@ const aggregateSummary = (rows) => {
     (acc, row) => {
       acc.totalReports += 1
       acc.totalSuspected += row.sCh
-      acc.totalConfirmed += row.cCh
+      acc.totalConfirmed += confirmedValue(row)
       acc.totalDeaths += row.deaths
       acc.cfrTotal += row.CFR
       return acc
@@ -101,12 +132,13 @@ const aggregateSummary = (rows) => {
 
 const buildSChVsCCh = (rows) =>
   rows.map((row, idx) => {
+    const confirmed = confirmedValue(row)
     const positivity =
-      row.sCh > 0 ? Number(((row.cCh / row.sCh) * 100).toFixed(1)) : 0
+      row.sCh > 0 ? Number(((confirmed / row.sCh) * 100).toFixed(1)) : 0
     return {
       label: `${row.location} • ${row.reportingDateRaw}`,
       sCh: row.sCh,
-      cCh: row.cCh,
+      cCh: confirmed,
       deaths: row.deaths,
       positivity,
       cfr: row.CFR,
@@ -124,13 +156,30 @@ const buildRegionDistribution = (rows) => {
       regionMap.set(key, { region: key, confirmed: 0 })
     }
     const entry = regionMap.get(key)
-    entry.confirmed += row.cCh
+    entry.confirmed += confirmedValue(row)
   })
 
   return Array.from(regionMap.values()).sort((a, b) => b.confirmed - a.confirmed)
 }
 
-const buildPeriodBuckets = (rows, period = 'month') => {
+const buildRegionSuspectedDistribution = (rows) => {
+  const regionMap = new Map()
+
+  rows.forEach((row) => {
+    const key = row.region && row.region.trim() ? row.region.trim() : 'Unknown'
+    if (key === 'Unknown') return
+    if (!regionMap.has(key)) {
+      regionMap.set(key, { region: key, suspected: 0 })
+    }
+    regionMap.get(key).suspected += safeNumber(row.sCh)
+  })
+
+  return Array.from(regionMap.values()).sort((a, b) => b.suspected - a.suspected)
+}
+
+const buildPeriodBuckets = (rows, period = 'month', options = {}) => {
+  const { fillGaps = true, rangeStart = null, rangeEnd = null } = options
+
   const map = new Map()
 
   rows.forEach((row) => {
@@ -162,6 +211,90 @@ const buildPeriodBuckets = (rows, period = 'month') => {
     bucket.confirmed += row.cCh
   })
 
+  const timestamps = (rows || [])
+    .map((r) => r.reportingDate)
+    .filter(Boolean)
+    .map((d) => d.valueOf())
+
+  const minActual = timestamps.length ? Math.min(...timestamps) : null
+  const maxActual = timestamps.length ? Math.max(...timestamps) : null
+
+  const start =
+    rangeStart instanceof Date
+      ? rangeStart.valueOf()
+      : rangeStart
+        ? new Date(rangeStart).valueOf()
+        : minActual
+
+  const end =
+    rangeEnd instanceof Date
+      ? rangeEnd.valueOf()
+      : rangeEnd
+        ? new Date(rangeEnd).valueOf()
+        : maxActual
+
+  if (!start || !end) {
+    return Array.from(map.values())
+      .sort((a, b) => a.sortKey - b.sortKey)
+      .map((bucket) => ({
+        label: bucket.label,
+        sortKey: bucket.sortKey,
+        suspected: bucket.suspected,
+        confirmed: bucket.confirmed,
+        positivity:
+          bucket.suspected > 0 ? (bucket.confirmed / bucket.suspected) * 100 : 0,
+        cfr: bucket.cfrCount > 0 ? bucket.cfrSum / bucket.cfrCount : 0,
+      }))
+  }
+
+  // Expand into a continuous time axis to prevent "skipped months" on charts.
+  if (fillGaps) {
+    const startDate = new Date(start)
+    const endDate = new Date(end)
+
+    const anchorStart =
+      period === 'year'
+        ? new Date(startDate.getFullYear(), 0, 1)
+        : new Date(startDate.getFullYear(), startDate.getMonth(), 1)
+    const anchorEnd =
+      period === 'year'
+        ? new Date(endDate.getFullYear(), 0, 1)
+        : new Date(endDate.getFullYear(), endDate.getMonth(), 1)
+
+    const out = []
+    let cursor = anchorStart.valueOf()
+    while (cursor <= anchorEnd.valueOf()) {
+      const d = new Date(cursor)
+      const key = period === 'year' ? `${d.getFullYear()}` : `${d.getFullYear()}-${d.getMonth()}`
+      const existing = map.get(key)
+      const label =
+        period === 'year'
+          ? `${d.getFullYear()}`
+          : d.toLocaleString('default', { month: 'short', year: 'numeric' })
+
+      const cfrSum = existing?.cfrSum ?? 0
+      const cfrCount = existing?.cfrCount ?? 0
+
+      out.push({
+        label,
+        sortKey: cursor,
+        suspected: existing?.suspected ?? 0,
+        confirmed: existing?.confirmed ?? 0,
+        positivity:
+          (existing?.suspected ?? 0) > 0
+            ? ((existing?.confirmed ?? 0) / (existing?.suspected ?? 0)) * 100
+            : 0,
+        cfr: cfrCount > 0 ? cfrSum / cfrCount : 0,
+      })
+
+      cursor = period === 'year'
+        ? new Date(d.getFullYear() + 1, 0, 1).valueOf()
+        : new Date(d.getFullYear(), d.getMonth() + 1, 1).valueOf()
+    }
+
+    return out
+  }
+
   return Array.from(map.values())
     .sort((a, b) => a.sortKey - b.sortKey)
     .map((bucket) => ({
@@ -175,13 +308,13 @@ const buildPeriodBuckets = (rows, period = 'month') => {
     }))
 }
 
-const buildConfirmedPositivitySeries = (rows) => ({
-  monthly: buildPeriodBuckets(rows, 'month'),
-  yearly: buildPeriodBuckets(rows, 'year'),
+const buildConfirmedPositivitySeries = (rows, options = {}) => ({
+  monthly: buildPeriodBuckets(rows, 'month', { fillGaps: true, ...options }),
+  yearly: buildPeriodBuckets(rows, 'year', { fillGaps: false, ...options }),
 })
 
-const buildMonthlySuspectedSeries = (rows) =>
-  buildPeriodBuckets(rows, 'month').map((bucket) => ({
+const buildMonthlySuspectedSeries = (rows, options = {}) =>
+  buildPeriodBuckets(rows, 'month', { fillGaps: true, ...options }).map((bucket) => ({
     label: bucket.label,
     suspected: bucket.suspected,
     confirmed: bucket.confirmed,
@@ -215,12 +348,12 @@ const buildSeasonalityProfile = (rows) => {
   })
 }
 
-const buildCfrTrend = (rows) => ({
-  monthly: buildPeriodBuckets(rows, 'month').map((bucket) => ({
+const buildCfrTrend = (rows, options = {}) => ({
+  monthly: buildPeriodBuckets(rows, 'month', { fillGaps: true, ...options }).map((bucket) => ({
     label: bucket.label,
     cfr: bucket.cfr,
   })),
-  yearly: buildPeriodBuckets(rows, 'year').map((bucket) => ({
+  yearly: buildPeriodBuckets(rows, 'year', { fillGaps: false, ...options }).map((bucket) => ({
     label: bucket.label,
     cfr: bucket.cfr,
   })),
@@ -326,6 +459,9 @@ const normalizeDistrictName = (value) =>
         .trim()
         .toLowerCase()
         .replace(/ district$/i, '')
+        .replace(/[^\w\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
     : ''
 
 const buildDistrictAggregates = (rows) => {
@@ -347,7 +483,7 @@ const buildDistrictAggregates = (rows) => {
     }
     const entry = stats.get(key)
     entry.suspected += row.sCh
-    entry.confirmed += row.cCh
+    entry.confirmed += confirmedValue(row)
     entry.deaths += row.deaths
 
     maxConfirmed = Math.max(maxConfirmed, entry.confirmed)
@@ -506,6 +642,17 @@ const buildResourcePlanningInsights = (rows, districtStats, breakdowns = null) =
     { suspected: 0, confirmed: 0, deaths: 0 },
   )
 
+  const dated = (rows || []).filter((row) => row.reportingDate)
+  const sortedByDate = dated.slice().sort((a, b) => a.reportingDate - b.reportingDate)
+  const latestDate = sortedByDate.length
+    ? sortedByDate[sortedByDate.length - 1].reportingDate
+    : null
+  const recent30d = latestDate
+    ? sortedByDate.filter(
+      (row) => row.reportingDate >= new Date(latestDate.valueOf() - 30 * 24 * 60 * 60 * 1000),
+    )
+    : []
+
   const priorityAreas = districtEntries
     .map((entry) => ({
       label: entry.name || entry.district,
@@ -521,12 +668,132 @@ const buildResourcePlanningInsights = (rows, districtStats, breakdowns = null) =
     .sort((a, b) => b.severity - a.severity)
     .slice(0, 10)
 
+  const recentPressurePoints = (() => {
+    if (!recent30d.length) return []
+    const recentDistricts = buildDistrictAggregates(recent30d)
+    return Object.values(recentDistricts?.districtLookup || {})
+      .map((entry) => ({
+        label: entry.name || entry.district,
+        suspected: entry.suspected || 0,
+        confirmed: entry.confirmed || 0,
+        deaths: entry.deaths || 0,
+        severity: (entry.confirmed || 0) + (entry.deaths || 0) * 5,
+      }))
+      .sort((a, b) => b.severity - a.severity)
+      .slice(0, 6)
+  })()
+
   const impactAssessment = {
     totalSuspected: totals.suspected,
     totalConfirmed: totals.confirmed,
     totalDeaths: totals.deaths,
     cfr: totals.confirmed ? (totals.deaths / totals.confirmed) * 100 : 0,
   }
+
+  const monthlyOverall = buildPeriodBuckets(rows, 'month')
+  const monthlyGrowthSeries = monthlyOverall.map((entry, idx) => {
+    const prev = idx > 0 ? monthlyOverall[idx - 1] : null
+    const growthRate =
+      prev && prev.confirmed
+        ? ((entry.confirmed - prev.confirmed) / prev.confirmed) * 100
+        : 0
+    const deltaConfirmed = prev ? entry.confirmed - prev.confirmed : 0
+    return {
+      label: entry.label,
+      confirmed: entry.confirmed,
+      suspected: entry.suspected,
+      deaths: entry.deaths,
+      growthRate,
+      deltaConfirmed,
+    }
+  })
+  const latestMonthlyGrowth =
+    monthlyGrowthSeries.length ? monthlyGrowthSeries[monthlyGrowthSeries.length - 1] : null
+
+  const growthByRegion = (() => {
+    if (monthlyOverall.length < 2) return []
+    const last = monthlyOverall[monthlyOverall.length - 1]
+    const prev = monthlyOverall[monthlyOverall.length - 2]
+    // Rebuild per-region counts for just the last two months for efficiency.
+    const lastKey = last.sortKey
+    const prevKey = prev.sortKey
+    const regionMap = new Map()
+    const bucketKey = (d) => new Date(d.getFullYear(), d.getMonth(), 1).valueOf()
+
+    sortedByDate.forEach((row) => {
+      if (!row.reportingDate) return
+      const k = bucketKey(row.reportingDate)
+      if (k !== lastKey && k !== prevKey) return
+      const region = row.region && row.region.trim() ? row.region.trim() : 'Unknown'
+      if (region === 'Unknown') return
+      if (!regionMap.has(region)) {
+        regionMap.set(region, { region, lastConfirmed: 0, prevConfirmed: 0 })
+      }
+      const entry = regionMap.get(region)
+      const c = confirmedValue(row)
+      if (k === lastKey) entry.lastConfirmed += c
+      if (k === prevKey) entry.prevConfirmed += c
+    })
+
+    return Array.from(regionMap.values())
+      .map((r) => ({
+        label: r.region,
+        growthRate:
+          r.prevConfirmed > 0
+            ? ((r.lastConfirmed - r.prevConfirmed) / r.prevConfirmed) * 100
+            : 0,
+        lastConfirmed: r.lastConfirmed,
+        prevConfirmed: r.prevConfirmed,
+      }))
+      .sort((a, b) => b.growthRate - a.growthRate)
+      .slice(0, 6)
+  })()
+
+  const severityPerThousand = (() => {
+    // Optional: only if population-like fields exist in the raw payload.
+    const byDistrict = new Map()
+    sortedByDate.forEach((row) => {
+      const districtKey = normalizeDistrictName(row.district || row.location)
+      if (!districtKey) return
+      const raw = row.raw || {}
+      const pop =
+        safeNumber(raw.population ?? raw.Population ?? raw.pop ?? raw.total_population)
+      if (!pop) return
+      // Keep the latest seen pop for the district.
+      byDistrict.set(districtKey, pop)
+    })
+    const totalPop = Array.from(byDistrict.values()).reduce((a, b) => a + b, 0)
+    if (!totalPop) return null
+    return {
+      populationCovered: totalPop,
+      suspected: (totals.suspected / totalPop) * 1000,
+      confirmed: (totals.confirmed / totalPop) * 1000,
+      deaths: (totals.deaths / totalPop) * 1000,
+    }
+  })()
+
+  const predictedSpreadPerDay = (() => {
+    if (sortedByDate.length < 2) return null
+    const withPred = sortedByDate.filter((r) => typeof r.predictedSCh === 'number')
+    const series = withPred.length >= 2 ? withPred : sortedByDate
+    if (series.length < 2) return null
+    const a = series[series.length - 2]
+    const b = series[series.length - 1]
+    const days = Math.max(
+      1,
+      Math.round((b.reportingDate.valueOf() - a.reportingDate.valueOf()) / (24 * 60 * 60 * 1000)),
+    )
+    const aVal = withPred.length >= 2 ? a.predictedSCh : confirmedValue(a)
+    const bVal = withPred.length >= 2 ? b.predictedSCh : confirmedValue(b)
+    const perDay = (bVal - aVal) / days
+    return {
+      basis: withPred.length >= 2 ? 'prediction' : 'confirmed',
+      perDay,
+      windowDays: days,
+      from: a.reportingDate,
+      to: b.reportingDate,
+    }
+  })()
 
   const referenceBreakdowns = breakdowns ?? buildMetricBreakdowns(rows)
   const resourceSignals = (referenceBreakdowns.regions || [])
@@ -544,6 +811,11 @@ const buildResourcePlanningInsights = (rows, districtStats, breakdowns = null) =
     priorityAreas,
     impactAssessment,
     resourceSignals,
+    growthByRegion,
+    latestMonthlyGrowth,
+    recentPressurePoints,
+    severityPerThousand,
+    predictedSpreadPerDay,
   }
 }
 
@@ -555,6 +827,7 @@ export {
   aggregateSummary,
   buildSChVsCCh,
   buildRegionDistribution,
+  buildRegionSuspectedDistribution,
   buildCfrTrend,
   buildInsights,
   buildDistrictAggregates,

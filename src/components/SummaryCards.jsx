@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import { useEffect, useState } from 'react'
 
 const cardVariants = {
   hidden: { opacity: 0, y: 24 },
@@ -35,10 +36,55 @@ const accentMap = {
 }
 
 function SummaryCards({ summary, onMetricSelect }) {
+  const [animatedValues, setAnimatedValues] = useState({
+    totalSuspected: 0,
+    totalConfirmed: 0,
+    totalDeaths: 0,
+    avgCFR: 0,
+    positivityRate: 0,
+  })
+
+  useEffect(() => {
+    let rafId
+    const start = performance.now()
+    const duration = 900
+    const from = animatedValues
+    const target = {
+      totalSuspected: Number(summary.totalSuspected || 0),
+      totalConfirmed: Number(summary.totalConfirmed || 0),
+      totalDeaths: Number(summary.totalDeaths || 0),
+      avgCFR: Number(summary.avgCFR || 0),
+      positivityRate: Number(summary.positivityRate || 0),
+    }
+
+    const tick = (now) => {
+      const progress = Math.min(1, (now - start) / duration)
+      const eased = 1 - (1 - progress) ** 3
+      setAnimatedValues({
+        totalSuspected: from.totalSuspected + (target.totalSuspected - from.totalSuspected) * eased,
+        totalConfirmed: from.totalConfirmed + (target.totalConfirmed - from.totalConfirmed) * eased,
+        totalDeaths: from.totalDeaths + (target.totalDeaths - from.totalDeaths) * eased,
+        avgCFR: from.avgCFR + (target.avgCFR - from.avgCFR) * eased,
+        positivityRate: from.positivityRate + (target.positivityRate - from.positivityRate) * eased,
+      })
+      if (progress < 1) rafId = requestAnimationFrame(tick)
+    }
+
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    summary.totalSuspected,
+    summary.totalConfirmed,
+    summary.totalDeaths,
+    summary.avgCFR,
+    summary.positivityRate,
+  ])
+
   return (
     <section className="grid stats-grid">
       {metrics.map((metric, index) => {
-        const value = summary[metric.key] || 0
+        const value = animatedValues[metric.key] || 0
         const formatted =
           metric.format?.(value) ??
           value.toLocaleString(undefined, { maximumFractionDigits: 0 })

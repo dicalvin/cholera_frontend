@@ -2,12 +2,6 @@
 
 A comprehensive dashboard for monitoring and analyzing cholera outbreak data in Uganda, featuring machine learning-powered forecasting.
 
-This `frontend/` folder contains the same React dashboard code as the main `cholera-dashboard/`
-project. When using the split layout in this repository:
-
-- The React app lives in `frontend/`
-- The Flask prediction API lives in `backend/`
-
 ## Features
 
 - **Interactive Maps**: Choropleth visualization of cholera cases by district
@@ -33,22 +27,34 @@ project. When using the split layout in this repository:
 
 ### Installation
 
-1. Install frontend dependencies:
+1. Clone the repository:
+```bash
+git clone https://github.com/dicalvin/Cholera-Watch.git
+cd Cholera-Watch
+```
+
+2. Install frontend dependencies:
 ```bash
 npm install
 ```
 
-### Running Locally
-
-1. **Start the Flask API** (Terminal 1, from the repo root):
+3. Install Python dependencies for the API:
 ```bash
-cd backend
-python xgboost_predict.py
+cd api
+pip install -r requirements.txt
 ```
 
-The API will run on `http://localhost:5001` by default.
+### Running Locally
 
-2. **Start the React frontend** (Terminal 2, inside `frontend/`):
+1. **Start the Flask API** (Terminal 1):
+```bash
+cd api
+python predict.py
+```
+
+The API will run on `http://localhost:5000`
+
+2. **Start the React frontend** (Terminal 2):
 ```bash
 npm run dev
 ```

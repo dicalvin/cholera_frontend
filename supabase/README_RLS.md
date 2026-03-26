@@ -32,3 +32,18 @@ If you use the Supabase CLI: `supabase db push` (or apply the migration as you n
 ## Optional: allow UPDATE only for authenticated users
 
 If your scanner also reports an overly permissive **UPDATE** policy on `cholera_reports`, uncomment the UPDATE block in the same migration file and run it again (or run the commented section in the SQL Editor).
+
+## Fix: `user_profiles` infinite recursion
+
+If the admin page shows:
+
+`infinite recursion detected in policy for relation "user_profiles"`
+
+run:
+
+- `supabase/migrations/20260210000000_fix_user_profiles_rls_recursion.sql`
+
+This migration:
+
+- replaces recursive `user_profiles` policies with non-recursive ones using `public.is_system_admin()`
+- backfills missing rows from `auth.users` into `public.user_profiles` so existing signups become visible

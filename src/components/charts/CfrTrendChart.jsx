@@ -18,6 +18,14 @@ const viewOptions = [
 function CfrTrendChart({ series = { monthly: [], yearly: [] } }) {
   const [view, setView] = useState('monthly')
   const data = series?.[view] ?? []
+  const ticks = (() => {
+    const n = data.length
+    if (!n) return []
+    const idx = new Set([0, Math.floor((n - 1) / 3), Math.floor((2 * (n - 1)) / 3), n - 1])
+    return Array.from(idx)
+      .map((i) => data[i]?.label)
+      .filter((v) => Boolean(v))
+  })()
 
   return (
     <motion.article
@@ -52,7 +60,11 @@ function CfrTrendChart({ series = { monthly: [], yearly: [] } }) {
       <ResponsiveContainer width="100%" height={320}>
         <LineChart data={data} margin={{ top: 12, right: 24, bottom: 8, left: 8 }}>
           <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="label" minTickGap={view === 'monthly' ? 24 : 12} />
+          <XAxis
+            dataKey="label"
+            ticks={ticks}
+            minTickGap={0}
+          />
           <YAxis
             label={{ value: 'CFR (%)', angle: -90, position: 'insideLeft' }}
             domain={[0, 'auto']}

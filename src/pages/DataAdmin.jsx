@@ -57,6 +57,15 @@ function DataAdmin() {
   const isAdmin =
     !!profile && profile.status === 'approved' && profile.role === 'system_admin'
 
+  const getDisplayName = (u) => {
+    const full = u.full_name?.trim()
+    if (full) return full
+    const joined = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+    if (joined) return joined
+    if (u.email && u.email.includes('@')) return u.email.split('@')[0]
+    return '-'
+  }
+
   const loadUsers = async () => {
     if (!isAdmin) return
     setUserLoading(true)
@@ -67,7 +76,14 @@ function DataAdmin() {
       .order('created_at', { ascending: true })
     setUserLoading(false)
     if (usersError) {
-      setUserError(usersError.message)
+      const isPolicyRecursion =
+        typeof usersError.message === 'string' &&
+        usersError.message.toLowerCase().includes('infinite recursion detected in policy')
+      setUserError(
+        isPolicyRecursion
+          ? 'RLS policy recursion detected on user_profiles. Run the Supabase migration `supabase/migrations/20260210000000_fix_user_profiles_rls_recursion.sql`, then refresh this page.'
+          : usersError.message,
+      )
       return
     }
     setUsers(data || [])
@@ -87,6 +103,21 @@ function DataAdmin() {
       .eq('id', id)
     if (updateError) {
       setUserError(updateError.message)
+      return
+    }
+    await loadUsers()
+  }
+
+  const deleteUser = async (id, email) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to permanently delete ${email || 'this user'}? This action cannot be undone.`,
+    )
+    if (!confirmed) return
+
+    setUserError('')
+    const { error: rpcError } = await supabase.rpc('admin_delete_user', { target_id: id })
+    if (rpcError) {
+      setUserError(rpcError.message)
       return
     }
     await loadUsers()
@@ -241,46 +272,68 @@ function DataAdmin() {
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map((u) => (
-                    <tr key={u.id}>
-                      <td>{u.email}</td>
-                      <td>{u.full_name || '-'}</td>
-                      <td>{u.phone || '-'}</td>
-                      <td>{u.requested_role || '-'}</td>
-                      <td>
-                        <select
-                          className="admin-role-select"
-                          value={u.role}
-                          onChange={(e) => updateUser(u.id, { role: e.target.value })}
-                        >
-                          <option value="data_entry">Data Entry</option>
-                          <option value="epidemiologist">Epidemiologist</option>
-                          <option value="surveillance">Surveillance</option>
-                          <option value="data_manager">Data Manager</option>
-                          <option value="system_admin">System Admin</option>
-                        </select>
-                      </td>
-                      <td>{u.status}</td>
-                      <td>
-                        <div className="button-row">
-                          <button
-                            type="button"
-                            className="button small admin-action admin-action--primary"
-                            onClick={() => updateUser(u.id, { status: 'approved' })}
-                          >
-                            Approve
-                          </button>
-                          <button
-                            type="button"
-                            className="button small admin-action admin-action--secondary"
-                            onClick={() => updateUser(u.id, { status: 'rejected' })}
-                          >
-                            Reject
-                          </button>
-                        </div>
+                  {users.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} style={{ padding: '0.75rem 0.9rem', color: '#64748b' }}>
+                        No users found. New signups will appear here once created in Supabase.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    users.map((u) => {
+                      const isApproved = u.status === 'approved'
+                      return (
+                      <tr key={u.id}>
+                        <td>{u.email}</td>
+                        <td>{getDisplayName(u)}</td>
+                        <td>{u.phone || '-'}</td>
+                        <td>{u.requested_role || '-'}</td>
+                        <td>
+                          <select
+                            className="admin-role-select"
+                            value={u.role}
+                            onChange={(e) => updateUser(u.id, { role: e.target.value })}
+                          >
+                            <option value="data_entry">Data Entry</option>
+                            <option value="epidemiologist">Epidemiologist</option>
+                            <option value="surveillance">Surveillance</option>
+                            <option value="data_manager">Data Manager</option>
+                            <option value="system_admin">System Admin</option>
+                          </select>
+                        </td>
+                        <td>{u.status}</td>
+                        <td>
+                          <div className="button-row">
+                            {!isApproved && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="button small admin-action admin-action--primary"
+                                  onClick={() => updateUser(u.id, { status: 'approved' })}
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  type="button"
+                                  className="button small admin-action admin-action--secondary"
+                                  onClick={() => updateUser(u.id, { status: 'rejected' })}
+                                >
+                                  Reject
+                                </button>
+                              </>
+                            )}
+                            <button
+                              type="button"
+                              className="button small admin-action admin-action--secondary"
+                              style={{ borderColor: '#fecaca', color: '#991b1b' }}
+                              onClick={() => deleteUser(u.id, u.email)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )})
+                  )}
                 </tbody>
               </table>
             </div>

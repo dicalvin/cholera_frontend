@@ -56,11 +56,25 @@ function Signup() {
     }
 
     setLoading(true)
-    const { data, error: signUpError } = await supabase.auth.signUp({
-      email,
+
+    // Pass profile fields as user metadata so the DB trigger can create
+    // the user_profiles row server-side (bypasses RLS — no active session yet).
+    const first = firstName.trim()
+    const last = lastName.trim()
+    const normalizedEmail = email.trim().toLowerCase()
+    const full_name = `${first} ${last}`.trim()
+    const { error: signUpError } = await supabase.auth.signUp({
+      email: normalizedEmail,
       password,
       options: {
         emailRedirectTo: `${window.location.origin}/login`,
+        data: {
+          first_name: first,
+          last_name: last,
+          full_name,
+          phone: phone.trim() || null,
+          requested_role: requestedRole,
+        },
       },
     })
 
@@ -72,29 +86,30 @@ function Signup() {
       return
     }
 
-    if (data.user) {
-      const full_name = `${firstName.trim()} ${lastName.trim()}`.trim()
-      const { error: profileError } = await supabase.from('user_profiles').insert({
-        id: data.user.id,
-        email,
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        full_name,
-        phone: phone.trim() || null,
-        requested_role: requestedRole,
-        role: 'data_entry',
-        status: 'pending',
-      })
-      if (profileError) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to create user profile', profileError)
-      }
+    // Best-effort profile upsert for projects where email confirmation is disabled.
+    const { data: signedUser } = await supabase.auth.getUser()
+    const maybeUser = signedUser?.user
+    if (maybeUser?.id) {
+      await supabase
+        .from('user_profiles')
+        .upsert(
+          {
+            id: maybeUser.id,
+            email: normalizedEmail,
+            first_name: first,
+            last_name: last,
+            full_name,
+            phone: phone.trim() || null,
+            requested_role: requestedRole,
+          },
+          { onConflict: 'id' },
+        )
     }
 
     setLoading(false)
-    setStatus('Account created. Please check your email to verify and wait for admin approval.')
+    setStatus('Account created! Please check your email to verify, then wait for admin approval.')
     // Navigate to login after a short delay
-    setTimeout(() => navigate('/login'), 2000)
+    setTimeout(() => navigate('/login'), 2500)
   }
 
   const getPasswordStrengthColor = () => {

@@ -188,7 +188,7 @@ function Profile() {
               )}
               <button
                 type="submit"
-                className="button small"
+                className="button primary"
                 disabled={passwordLoading}
               >
                 {passwordLoading ? 'Updating…' : 'Update password'}
@@ -216,7 +216,7 @@ function Profile() {
               )}
               <button
                 type="submit"
-                className="button small secondary"
+                className="button secondary"
                 disabled={emailLoading}
               >
                 {emailLoading ? 'Sending confirmation…' : 'Request email change'}
@@ -225,7 +225,7 @@ function Profile() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button type="button" className="button primary" onClick={handleLogout}>
+            <button type="button" className="button primary profile-logout-btn" onClick={handleLogout}>
               Log out
             </button>
           </div>

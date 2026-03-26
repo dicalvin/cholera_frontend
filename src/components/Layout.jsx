@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../context/AuthContext'
 
@@ -15,12 +15,13 @@ function formatLiveAgo(date) {
 }
 
 const navLinks = [
-  { to: '/', label: 'Overview', end: true, icon: 'overview' },
-  { to: '/analytics', label: 'Analytics & Filters', end: false, icon: 'analytics' },
-  { to: '/response-insights', label: 'Response Insights', end: false, icon: 'insights' },
-  { to: '/early-warning', label: 'Early Warning', end: false, icon: 'warning' },
-  { to: '/weather', label: 'Weather', end: false, icon: 'weather' },
-  { to: '/resource-planning', label: 'Resource Planning', end: false, icon: 'planning' },
+  { to: '/', label: 'Overview', end: true, icon: 'overview', allowedRoles: ['data_entry', 'epidemiologist', 'surveillance', 'data_manager', 'system_admin'] },
+  { to: '/map', label: 'Map', end: false, icon: 'overview', allowedRoles: ['data_entry', 'epidemiologist', 'surveillance', 'data_manager', 'system_admin'] },
+  { to: '/analytics', label: 'Analytics & Filters', end: false, icon: 'analytics', allowedRoles: ['data_entry', 'epidemiologist', 'surveillance', 'data_manager', 'system_admin'] },
+  { to: '/response-insights', label: 'Response Insights', end: false, icon: 'insights', allowedRoles: ['epidemiologist', 'surveillance', 'data_manager', 'system_admin'] },
+  { to: '/early-warning', label: 'Early Warning', end: false, icon: 'warning', allowedRoles: ['epidemiologist', 'surveillance', 'data_manager', 'system_admin'] },
+  { to: '/weather', label: 'Weather', end: false, icon: 'weather', allowedRoles: ['data_entry', 'epidemiologist', 'surveillance', 'data_manager', 'system_admin'] },
+  { to: '/resource-planning', label: 'Resource Planning', end: false, icon: 'planning', allowedRoles: ['data_manager', 'surveillance', 'system_admin'] },
 ]
 
 const icons = {
@@ -89,10 +90,24 @@ function Layout({ children, loading, summary, lastUpdatedAt }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [isDesktop, setIsDesktop] = useState(true)
   const [liveLabel, setLiveLabel] = useState(() => formatLiveAgo(lastUpdatedAt))
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('dashboard-theme') || 'light'
+      return saved === 'midnight' ? 'dark' : saved
+    } catch {
+      return 'light'
+    }
+  })
   const { user, profile, signOut } = useAuth()
+  const location = useLocation()
   const navigate = useNavigate()
   const isAdmin =
     !!profile && profile.status === 'approved' && profile.role === 'system_admin'
+  const currentRole = isAdmin ? 'system_admin' : (profile?.role || 'data_entry')
+  const allowedNavLinks = useMemo(
+    () => navLinks.filter((link) => link.allowedRoles.includes(currentRole)),
+    [currentRole],
+  )
 
   const displayName = useMemo(() => {
     const name = profile?.full_name?.trim()
@@ -120,6 +135,30 @@ function Layout({ children, loading, summary, lastUpdatedAt }) {
     return () => window.removeEventListener('resize', check)
   }, [])
 
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try {
+      window.localStorage.setItem('dashboard-theme', theme)
+    } catch {
+      // ignore storage errors
+    }
+  }, [theme])
+
+  const pageTitle = useMemo(() => {
+    const map = {
+      '/': 'Dashboard',
+      '/analytics': 'Analytics',
+      '/response-insights': 'Response Insights',
+      '/early-warning': 'Early Warning',
+      '/weather': 'Weather Intelligence',
+      '/resource-planning': 'Resource Planning',
+      '/profile': 'Profile',
+      '/admin': 'Admin Control',
+      '/data-admin': 'Admin Control',
+    }
+    return map[location.pathname] || 'Dashboard'
+  }, [location.pathname])
+
   return (
     <div className={`app-shell ${isDesktop ? 'app-shell--sidebar' : ''}`}>
       <aside className="sidebar">
@@ -129,7 +168,7 @@ function Layout({ children, loading, summary, lastUpdatedAt }) {
           <small className="sidebar__brand-tag">Cholera Watch</small>
         </div>
         <nav className="sidebar__nav" aria-label="Main navigation">
-          {navLinks.map((link) => (
+          {allowedNavLinks.map((link) => (
             <NavLink
               key={link.to}
               to={link.to}
@@ -237,7 +276,7 @@ function Layout({ children, loading, summary, lastUpdatedAt }) {
               exit={{ opacity: 0, height: 0 }}
               transition={{ duration: 0.2 }}
             >
-              {navLinks.map((link) => (
+              {allowedNavLinks.map((link) => (
                 <NavLink
                   key={link.to}
                   to={link.to}
@@ -287,7 +326,42 @@ function Layout({ children, loading, summary, lastUpdatedAt }) {
         </div>
       </div>
 
-      <main className="main-content">{children}</main>
+      <main className="main-content">
+        <section className="dashboard-shell">
+          <header className="dashboard-shell__header">
+            <div>
+              <p className="dashboard-shell__eyebrow">Cholera Watch</p>
+              <h1 className="dashboard-shell__title">{pageTitle}</h1>
+              <p className="dashboard-shell__subtle">
+                {liveLabel ? `Last refresh ${liveLabel}` : 'Live operational dashboard'}
+              </p>
+            </div>
+            <div className="dashboard-shell__meta">
+              <span className="dashboard-live-pill">
+                <span className="sidebar__live-dot" aria-hidden="true" />
+                Supabase live data
+              </span>
+              <div className="theme-switcher" role="group" aria-label="Theme switcher">
+                <button
+                  type="button"
+                  className={`theme-switcher__button ${theme === 'light' ? 'active' : ''}`}
+                  onClick={() => setTheme('light')}
+                >
+                  Light
+                </button>
+                <button
+                  type="button"
+                  className={`theme-switcher__button ${theme === 'dark' ? 'active' : ''}`}
+                  onClick={() => setTheme('dark')}
+                >
+                  Dark
+                </button>
+              </div>
+            </div>
+          </header>
+          {children}
+        </section>
+      </main>
     </div>
   )
 }

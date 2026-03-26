@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 import Layout from './components/Layout'
 import Overview from './pages/Overview'
+import MapPage from './pages/Map'
 import Analytics from './pages/Analytics'
 import ResponseInsights from './pages/ResponseInsights'
 import EarlyWarning from './pages/EarlyWarning'
@@ -17,12 +18,14 @@ import Terms from './pages/Terms'
 import Privacy from './pages/Privacy'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import useCholeraData from './hooks/useCholeraData'
+import ErrorBoundary from './components/ErrorBoundary'
 import {
   aggregateSummary,
   buildCfrTrend,
   buildDistrictAggregates,
   buildInsights,
   buildRegionDistribution,
+  buildRegionSuspectedDistribution,
   buildSChVsCCh,
   buildConfirmedPositivitySeries,
   buildMonthlySuspectedSeries,
@@ -38,13 +41,37 @@ import {
 } from './utils/dataTransforms'
 
 const ANALYTICS_START = new Date(2011, 0, 1)
-const ANALYTICS_END = new Date(2024, 11, 31)
+const ANALYTICS_END = new Date(2100, 11, 31)
+const ALL_APPROVED_ROLES = ['data_entry', 'epidemiologist', 'surveillance', 'data_manager', 'system_admin']
+
+function canAccessRoute(role, path) {
+  const accessMap = {
+    '/': ALL_APPROVED_ROLES,
+    '/map': ALL_APPROVED_ROLES,
+    '/analytics': ALL_APPROVED_ROLES,
+    '/weather': ALL_APPROVED_ROLES,
+    '/profile': ALL_APPROVED_ROLES,
+    '/response-insights': ['epidemiologist', 'surveillance', 'data_manager', 'system_admin'],
+    '/early-warning': ['epidemiologist', 'surveillance', 'data_manager', 'system_admin'],
+    '/resource-planning': ['data_manager', 'surveillance', 'system_admin'],
+    '/data-admin': ['system_admin'],
+    '/admin': ['system_admin'],
+  }
+  return (accessMap[path] || []).includes(role)
+}
+
+function RoleProtectedRoute({ role, path, element }) {
+  if (!canAccessRoute(role, path)) {
+    return <Navigate to="/" replace />
+  }
+  return element
+}
 
 function InnerApp() {
-  const { user, loading: authLoading } = useAuth()
+  const { user, profile, loading: authLoading, profileLoading } = useAuth()
   const location = useLocation()
 
-  const { data, loading, error, minDate, maxDate, lastUpdatedAt } = useCholeraData()
+  const { data, loading, error, minDate, maxDate, lastUpdatedAt, dbSummary } = useCholeraData()
   const [geoData, setGeoData] = useState(null)
   const [geoError, setGeoError] = useState('')
   const [dateRange, setDateRange] = useState({ start: '', end: '' })
@@ -104,6 +131,8 @@ function InnerApp() {
 
   const filteredData = useMemo(() => {
     if (!data || data.length === 0) return []
+    // Always clamp the dashboard dataset to the effective date range.
+    // This guarantees the UI starts from `2011-01-01` even before the user applies filters.
     const byDate = filterByDateRange(data, effectiveDateRange)
     const byLocation = filterByRegionAndDistrict(byDate, {
       regions: selectedRegions,
@@ -112,13 +141,87 @@ function InnerApp() {
     return byLocation
   }, [data, effectiveDateRange, selectedRegions, selectedDistricts])
 
+  const overallData = useMemo(() => {
+    const OVERVIEW_START = new Date(2011, 0, 1)
+    const overviewRows = (data || []).filter(
+      (row) => row.reportingDate && row.reportingDate >= OVERVIEW_START,
+    )
+
+    const computed = aggregateSummary(data || [])
+    const summary = {
+      ...computed,
+      totalReports: dbSummary.totalReports,
+      totalSuspected: dbSummary.totalSuspected,
+      totalConfirmed: dbSummary.totalConfirmed,
+      totalDeaths: dbSummary.totalDeaths,
+      avgCFR: dbSummary.avgCFR,
+      positivityRate: dbSummary.positivityRate,
+    }
+    const regionDistribution = buildRegionDistribution(overviewRows)
+    const cfrTrend = buildCfrTrend(overviewRows, { rangeStart: OVERVIEW_START })
+    const confirmedPositivity = buildConfirmedPositivitySeries(overviewRows, {
+      rangeStart: OVERVIEW_START,
+    })
+    const monthlySuspected = buildMonthlySuspectedSeries(overviewRows, {
+      rangeStart: OVERVIEW_START,
+    })
+    const insights = buildInsights(
+      data || [],
+      regionDistribution,
+      cfrTrend,
+      summary,
+    )
+    const districtStats = buildDistrictAggregates(data || [])
+    const breakdowns = buildMetricBreakdowns(data || [])
+    const overviewDistrictStats = buildDistrictAggregates(overviewRows)
+    const districtsBySuspected = Object.values(
+      overviewDistrictStats?.districtLookup || {},
+    )
+      .map((entry) => ({
+        label: entry.name || entry.district,
+        suspected: entry.suspected || 0,
+      }))
+      .sort((a, b) => b.suspected - a.suspected)
+    const topDistrictsBySuspected = districtsBySuspected.slice(0, 6)
+    const allDistrictsBySuspected = districtsBySuspected
+    const regionSuspectedDistribution =
+      buildRegionSuspectedDistribution(overviewRows)
+    const monthlyConfirmedTrend = buildConfirmedPositivitySeries(
+      overviewRows,
+      { rangeStart: OVERVIEW_START },
+    ).monthly.map(({ label, confirmed }) => ({ label, confirmed }))
+    return {
+      summary,
+      insights,
+      districtStats,
+      breakdowns,
+      regionDistribution,
+      cfrTrend,
+      confirmedPositivity,
+      monthlySuspected,
+      topDistrictsBySuspected,
+      allDistrictsBySuspected,
+      regionSuspectedDistribution,
+      monthlyConfirmedTrend,
+    }
+  }, [data, dbSummary])
+
   const memoizedData = useMemo(() => {
     const summary = aggregateSummary(filteredData)
     const regionDistribution = buildRegionDistribution(filteredData)
     const scatterData = buildSChVsCCh(filteredData)
-    const cfrTrend = buildCfrTrend(filteredData)
-    const confirmedPositivity = buildConfirmedPositivitySeries(filteredData)
-    const monthlySuspected = buildMonthlySuspectedSeries(filteredData)
+    const cfrTrend = buildCfrTrend(filteredData, {
+      rangeStart: effectiveDateRange.start,
+      rangeEnd: effectiveDateRange.end,
+    })
+    const confirmedPositivity = buildConfirmedPositivitySeries(filteredData, {
+      rangeStart: effectiveDateRange.start,
+      rangeEnd: effectiveDateRange.end,
+    })
+    const monthlySuspected = buildMonthlySuspectedSeries(filteredData, {
+      rangeStart: effectiveDateRange.start,
+      rangeEnd: effectiveDateRange.end,
+    })
     const seasonality = buildSeasonalityProfile(filteredData)
     const insights = buildInsights(
       filteredData,
@@ -151,7 +254,7 @@ function InnerApp() {
       earlyWarning,
       resourcePlanning,
     }
-  }, [filteredData])
+  }, [filteredData, effectiveDateRange.start, effectiveDateRange.end])
 
   const dateBounds = useMemo(
     () => ({
@@ -194,99 +297,213 @@ function InnerApp() {
     return <Navigate to="/login" replace />
   }
 
+  // While the profile row is being fetched from Supabase, show a spinner.
+  // Without this guard, App briefly sees user=set + profile=null and renders
+  // the pending-approval wall before the fetch finishes.
+  if (profileLoading && !profile) {
+    return (
+      <div className="page">
+        <p className="status-text">Loading profile…</p>
+      </div>
+    )
+  }
+
+  // Block access for users whose profile is not yet approved.
+  // system_admin users are always allowed through regardless of status.
+  // The primary admin email is also hardcoded as a fallback in case the
+  // DB migration hasn't been run yet.
+  const ADMIN_EMAILS = ['dicalvin17@gmail.com']
+  const isAdmin = profile?.role === 'system_admin' || ADMIN_EMAILS.includes(user?.email)
+  const isApproved = profile?.status === 'approved'
+  const currentRole = isAdmin ? 'system_admin' : (profile?.role || 'data_entry')
+
+  if (!isApproved && !isAdmin) {
+    return (
+      <div className="page">
+        <section className="chart-card">
+          <div className="section-header">
+            <h3>Access pending approval</h3>
+            <p>
+              Your account has been created but is still awaiting approval from a system
+              administrator. You will receive access to the dashboard once your status is updated
+              to approved.
+            </p>
+          </div>
+          <p className="status-text">
+            Current status:
+            {' '}
+            <strong>{profile?.status || 'pending'}</strong>
+          </p>
+          <p className="status-text" style={{ marginTop: '0.5rem' }}>
+            If this takes longer than expected, please contact your Cholera Watch system
+            administrator.
+          </p>
+        </section>
+      </div>
+    )
+  }
+
   // Protected application: wrapped in Layout, all routes require login
   return (
-    <Layout
-      loading={loading}
-      summary={memoizedData.summary}
-      lastUpdatedAt={lastUpdatedAt}
-    >
-      <Routes>
-        <Route
-          path="/"
-          element={(
-            <Overview
-              loading={loading}
-              error={error}
-              insights={memoizedData.insights}
-              summary={memoizedData.summary}
-              districtStats={memoizedData.districtStats}
-              geoData={geoData}
-              geoError={geoError}
-              dateRange={effectiveDateRange}
-              breakdowns={memoizedData.breakdowns}
-              dataUpdatedAt={lastUpdatedAt}
-            />
-          )}
-        />
-        <Route
-          path="/analytics"
-          element={(
-            <Analytics
-              loading={loading}
-              error={error}
-              dateRange={effectiveDateRange}
-              onDateChange={setDateRange}
-              dateBounds={dateBounds}
-              regionOptions={regionOptions}
-              districtOptions={districtOptions}
-              selectedRegions={selectedRegions}
-              selectedDistricts={selectedDistricts}
-              onRegionChange={setSelectedRegions}
-              onDistrictChange={setSelectedDistricts}
-              summary={memoizedData.summary}
-              scatterData={memoizedData.scatterData}
-              regionDistribution={memoizedData.regionDistribution}
-              cfrTrend={memoizedData.cfrTrend}
-              confirmedPositivity={memoizedData.confirmedPositivity}
-              monthlySuspected={memoizedData.monthlySuspected}
-              seasonality={memoizedData.seasonality}
-            />
-          )}
-        />
-        <Route
-          path="/response-insights"
-          element={(
-            <ResponseInsights
-              loading={loading}
-              error={error}
-              spreadInsights={memoizedData.responseInsights}
-              filteredData={filteredData}
-              summary={memoizedData.summary}
-            />
-          )}
-        />
-        <Route
-          path="/early-warning"
-          element={(
-            <EarlyWarning
-              loading={loading}
-              error={error}
-              earlyWarning={memoizedData.earlyWarning}
-              filteredData={filteredData}
-              summary={memoizedData.summary}
-            />
-          )}
-        />
-        <Route
-          path="/resource-planning"
-          element={(
-            <ResourcePlanning
-              loading={loading}
-              error={error}
-              resourcePlanning={memoizedData.resourcePlanning}
-              filteredData={filteredData}
-              summary={memoizedData.summary}
-            />
-          )}
-        />
-        <Route path="/weather" element={<Weather />} />
-        <Route path="/profile" element={<Profile />} />
-        <Route path="/data-admin" element={<DataAdmin />} />
-        <Route path="/admin" element={<DataAdmin />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Layout>
+    <ErrorBoundary>
+      <Layout
+        loading={loading}
+        summary={memoizedData.summary}
+        lastUpdatedAt={lastUpdatedAt}
+      >
+        <Routes>
+          <Route
+            path="/"
+            element={(
+              <RoleProtectedRoute
+                role={currentRole}
+                path="/"
+                element={(
+                  <Overview
+                    loading={loading}
+                    error={error}
+                    insights={overallData.insights}
+                    summary={overallData.summary}
+                    breakdowns={overallData.breakdowns}
+                    regionDistribution={overallData.regionDistribution}
+                    regionSuspectedDistribution={
+                      overallData.regionSuspectedDistribution
+                    }
+                    monthlySuspected={overallData.monthlySuspected}
+                    monthlyConfirmedTrend={overallData.monthlyConfirmedTrend}
+                    topDistrictsBySuspected={overallData.topDistrictsBySuspected}
+                    allDistrictsBySuspected={overallData.allDistrictsBySuspected}
+                  />
+                )}
+              />
+            )}
+          />
+          <Route
+            path="/map"
+            element={(
+              <RoleProtectedRoute
+                role={currentRole}
+                path="/map"
+                element={(
+                  <MapPage
+                    loading={loading}
+                    error={error}
+                    geoData={geoData}
+                    geoError={geoError}
+                    districtStats={overallData.districtStats}
+                    dateRange={effectiveDateRange}
+                    dataUpdatedAt={lastUpdatedAt}
+                  />
+                )}
+              />
+            )}
+          />
+          <Route
+            path="/analytics"
+            element={(
+              <RoleProtectedRoute
+                role={currentRole}
+                path="/analytics"
+                element={(
+                  <Analytics
+                    loading={loading}
+                    error={error}
+                    dateRange={effectiveDateRange}
+                    onDateChange={setDateRange}
+                    dateBounds={dateBounds}
+                    regionOptions={regionOptions}
+                    districtOptions={districtOptions}
+                    selectedRegions={selectedRegions}
+                    selectedDistricts={selectedDistricts}
+                    onRegionChange={setSelectedRegions}
+                    onDistrictChange={setSelectedDistricts}
+                    summary={memoizedData.summary}
+                    scatterData={memoizedData.scatterData}
+                    regionDistribution={memoizedData.regionDistribution}
+                    cfrTrend={memoizedData.cfrTrend}
+                    confirmedPositivity={memoizedData.confirmedPositivity}
+                    monthlySuspected={memoizedData.monthlySuspected}
+                    seasonality={memoizedData.seasonality}
+                    filteredData={filteredData}
+                  />
+                )}
+              />
+            )}
+          />
+          <Route
+            path="/response-insights"
+            element={(
+              <RoleProtectedRoute
+                role={currentRole}
+                path="/response-insights"
+                element={(
+                  <ResponseInsights
+                    loading={loading}
+                    error={error}
+                    spreadInsights={memoizedData.responseInsights}
+                    filteredData={filteredData}
+                    summary={memoizedData.summary}
+                  />
+                )}
+              />
+            )}
+          />
+          <Route
+            path="/early-warning"
+            element={(
+              <RoleProtectedRoute
+                role={currentRole}
+                path="/early-warning"
+                element={(
+                  <EarlyWarning
+                    loading={loading}
+                    error={error}
+                    earlyWarning={memoizedData.earlyWarning}
+                    filteredData={filteredData}
+                    summary={memoizedData.summary}
+                  />
+                )}
+              />
+            )}
+          />
+          <Route
+            path="/resource-planning"
+            element={(
+              <RoleProtectedRoute
+                role={currentRole}
+                path="/resource-planning"
+                element={(
+                  <ResourcePlanning
+                    loading={loading}
+                    error={error}
+                    resourcePlanning={memoizedData.resourcePlanning}
+                    filteredData={filteredData}
+                    summary={memoizedData.summary}
+                  />
+                )}
+              />
+            )}
+          />
+          <Route
+            path="/weather"
+            element={<RoleProtectedRoute role={currentRole} path="/weather" element={<Weather />} />}
+          />
+          <Route
+            path="/profile"
+            element={<RoleProtectedRoute role={currentRole} path="/profile" element={<Profile />} />}
+          />
+          <Route
+            path="/data-admin"
+            element={<RoleProtectedRoute role={currentRole} path="/data-admin" element={<DataAdmin />} />}
+          />
+          <Route
+            path="/admin"
+            element={<RoleProtectedRoute role={currentRole} path="/admin" element={<DataAdmin />} />}
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
+    </ErrorBoundary>
   )
 }
 
