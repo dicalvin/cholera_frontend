@@ -98,7 +98,7 @@ const parseRow = (row, idx) => {
 }
 
 const POLL_INTERVAL_MS = 15_000 // normal polling interval
-const FAST_FALLBACK_POLL_INTERVAL_MS = 5_000 // fast fallback when Realtime websocket is unavailable
+const FAST_FALLBACK_POLL_INTERVAL_MS = 300_000 // fast fallback when Realtime websocket is unavailable
 const REFRESH_DEBOUNCE_MS = 1200
 const MAX_RETRIES = 4
 const RETRY_DELAYS_MS = [1000, 3000, 6000, 15000]
